@@ -152,10 +152,8 @@ class MongoCrypt(object):
             self.close()
             raise
 
-    def __init(self):
-        """Internal init helper."""
+    def __setopt_kms_providers(self):
         kms_providers = self.__opts.kms_providers
-
         # Make fields that can be passed as binary or string safe to
         # encode to BSON.
         base64_or_bytes_fields = [("local", "key"), ("gcp", "privateKey")]
@@ -172,6 +170,36 @@ class MongoCrypt(object):
                     self.__crypt, kmsopt.bin):
                 self.__raise_from_status()
 
+    def __setopt_kms_providers_shim(self):
+        """Helper for libmongocrypt <1.1."""
+        kms_providers = self.__opts.kms_providers
+        if 'gcp' in kms_providers or 'azure' in kms_providers:
+            raise ValueError("TODO Upgrade")
+        if 'aws' in kms_providers:
+            access_key_id = str_to_bytes(kms_providers['aws']['accessKeyId'])
+            secret_access_key = str_to_bytes(
+                kms_providers['aws']['secretAccessKey'])
+            if not lib.mongocrypt_setopt_kms_provider_aws(
+                    self.__crypt,
+                    access_key_id, len(access_key_id),
+                    secret_access_key, len(secret_access_key)):
+                 self.__raise_from_status()
+        if 'local' in kms_providers:
+            key = kms_providers['local']['key']
+            with MongoCryptBinaryIn(key) as binary_key:
+                if not lib.mongocrypt_setopt_kms_provider_local(
+                        self.__crypt, binary_key.bin):
+                    self.__raise_from_status()
+
+    def __init(self):
+        """Internal init helper."""
+        if hasattr(lib, 'mongocrypt_setopt_kms_providers'):
+            # libmongocrypt >= 1.1
+            self.__setopt_kms_providers()
+        else:
+            # libmongocrypt < 1.1
+            self.__setopt_kms_providers_shim()
+
         schema_map = self.__opts.schema_map
         if schema_map is not None:
             with MongoCryptBinaryIn(schema_map) as binary_schema_map:
@@ -184,9 +212,10 @@ class MongoCrypt(object):
                 secure_random, hmac_sha_512, hmac_sha_256, sha_256, ffi.NULL):
             self.__raise_from_status()
 
-        if not lib.mongocrypt_setopt_crypto_hook_sign_rsaes_pkcs1_v1_5(
-                self.__crypt, sign_rsaes_pkcs1_v1_5, ffi.NULL):
-            self.__raise_from_status()
+        if hasattr(lib, 'mongocrypt_setopt_crypto_hook_sign_rsaes_pkcs1_v1_5'):
+            if not lib.mongocrypt_setopt_crypto_hook_sign_rsaes_pkcs1_v1_5(
+                    self.__crypt, sign_rsaes_pkcs1_v1_5, ffi.NULL):
+                self.__raise_from_status()
 
         if not lib.mongocrypt_init(self.__crypt):
             self.__raise_from_status()
@@ -523,12 +552,7 @@ class DataKeyContext(MongoCryptContext):
                         '"keyRing", and "keyName" for kms_provider: "gcp"')
 
             master_key['provider'] = kms_provider
-            with MongoCryptBinaryIn(
-                    callback.bson_encode(master_key)) as mkey:
-                if not lib.mongocrypt_ctx_setopt_key_encryption_key(
-                        ctx, mkey.bin):
-                    self._raise_from_status()
-
+            self.__ctx_setopt_key_encryption_key(ctx, callback, master_key)
             if opts.key_alt_names:
                 for key_alt_name in opts.key_alt_names:
                     with MongoCryptBinaryIn(key_alt_name) as binary:
@@ -542,6 +566,37 @@ class DataKeyContext(MongoCryptContext):
             # Destroy the context on error.
             self._close()
             raise
+
+    def __ctx_setopt_key_encryption_key(self, ctx, callback, master_key):
+        if hasattr(lib, 'mongocrypt_ctx_setopt_key_encryption_key'):
+            with MongoCryptBinaryIn(
+                    callback.bson_encode(master_key)) as mkey:
+                if not lib.mongocrypt_ctx_setopt_key_encryption_key(
+                        ctx, mkey.bin):
+                    self._raise_from_status()
+        else:
+            self.__ctx_setopt_key_encryption_key_shim(ctx, callback, master_key)
+
+    def __ctx_setopt_key_encryption_key_shim(self, ctx, callback, master_key):
+        kms_provider = master_key['provider']
+        if kms_provider == 'aws':
+            region = str_to_bytes(master_key['region'])
+            key = str_to_bytes(master_key['key'])
+            if not lib.mongocrypt_ctx_setopt_masterkey_aws(
+                    ctx, region, len(region), key, len(key)):
+                self._raise_from_status()
+            if 'endpoint' in master_key:
+                endpoint = str_to_bytes(master_key['endpoint'])
+                if not lib.mongocrypt_ctx_setopt_masterkey_aws_endpoint(
+                        ctx, endpoint, len(endpoint)):
+                    self._raise_from_status()
+        elif kms_provider == 'local':
+            if not lib.mongocrypt_ctx_setopt_masterkey_local(ctx):
+                self._raise_from_status()
+        elif kms_provider in ('azure', 'gcp'):
+            raise ValueError('TODO Upgrade')
+        else:
+            raise ValueError('TODO invalid')
 
 
 class MongoCryptKmsContext(object):

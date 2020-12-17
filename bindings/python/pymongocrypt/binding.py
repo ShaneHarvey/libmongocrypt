@@ -12,22 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import os.path
 import sys
 
 import cffi
 
 from pymongocrypt.compat import PY3
-from pymongocrypt.version import _MIN_LIBMONGOCRYPT_VERSION
-
-try:
-    from pkg_resources import parse_version as _parse_version
-except ImportError:
-    from distutils.version import LooseVersion as _LooseVersion
-
-    def _parse_version(version):
-        return _LooseVersion(version)
 
 
 ffi = cffi.FFI()
@@ -1066,11 +1056,3 @@ except OSError as exc:
     # dlopen raises OSError when the library cannot be found.
     # Delay the error until the library is actually used.
     lib = _Library(exc)
-else:
-    # Check the libmongocrypt version when the library is found.
-    _limongocrypt_version = _parse_version(libmongocrypt_version())
-    if _limongocrypt_version < _parse_version(_MIN_LIBMONGOCRYPT_VERSION):
-        exc = RuntimeError(
-            "Expected libmongocrypt version %s or greater, found %s" % (
-                _MIN_LIBMONGOCRYPT_VERSION, libmongocrypt_version()))
-        lib = _Library(exc)

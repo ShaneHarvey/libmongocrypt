@@ -13,5 +13,3 @@
 # limitations under the License.
 
 __version__ = '1.1.0b1.dev0'
-
-_MIN_LIBMONGOCRYPT_VERSION = '1.1.0-beta1'
