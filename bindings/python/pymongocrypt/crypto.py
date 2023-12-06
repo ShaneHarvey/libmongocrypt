@@ -53,13 +53,26 @@ def _aes_256_encrypt(key, mode, input, output, bytes_written):
     bytes_written[0] = len(data)
 
 
+from collections import defaultdict
+from threading import Lock
+_lock = Lock()
+_cipher_cache = defaultdict(list)
+
+
 def _aes_256_decrypt(key, mode, input, output, bytes_written):
-    cipher = Cipher(algorithms.AES(_to_bytes(key)), mode,
-                    backend=default_backend())
+    cipher = None
+    with _lock:
+        ciphers = _cipher_cache.get((algorithms.AES(_to_bytes(key)), mode))
+        if ciphers:
+            cipher = ciphers.pop()
+    if not cipher:
+    cipher = Cipher(algorithms.AES(_to_bytes(key)), mode, backend=default_backend())
     decryptor = cipher.decryptor()
     data = decryptor.update(_to_bytes(input)) + decryptor.finalize()
     _write_bytes(output, data)
     bytes_written[0] = len(data)
+    with _lock:
+        _cipher_cache[(algorithms.AES(_to_bytes(key)), mode)].append(cipher)
 
 
 @ffi.callback(
